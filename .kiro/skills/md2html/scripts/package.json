@@ -1,0 +1,10 @@
+{
+  "name": "md2html-scripts",
+  "version": "1.0.0",
+  "description": "md2html node engine dependencies",
+  "type": "module",
+  "dependencies": {
+    "markdown-it": "^14.1.1",
+    "markdown-it-footnote": "^4.0.0"
+  }
+}
