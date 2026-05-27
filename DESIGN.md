@@ -573,11 +573,71 @@ AWS_BEARER_TOKEN_BEDROCK=your_key_here
 - **Maintainability:** Single source of truth for configuration
 - **Onboarding:** New developers see what variables exist
 
+### Input Validation (Security)
+
+Validate all external input at system boundaries. Centralize validators in `lib/validation.py`:
+
+**Critical validation points:**
+
+1. **File Paths** (path traversal prevention)
+   ```python
+   from lib.validation import validate_output_path
+
+   # Prevents: -o ../../../../etc/passwd
+   output_path = validate_output_path(args.output)  # Raises ValueError if unsafe
+   with open(output_path, "w") as f:
+       f.write(result)
+   ```
+   - Uses `pathlib.Path.resolve()` to canonicalize paths
+   - Ensures resolved path stays within project directory
+   - Tests: symlink attacks, mixed traversal, absolute escapes
+
+2. **URLs** (scheme validation)
+   ```python
+   from lib.validation import validate_url
+
+   # Prevents: file://, ftp://, malformed URLs
+   validate_url(args.url)  # Only allows http/https
+   response = httpx.get(args.url)
+   ```
+   - Only allows http/https schemes
+   - Validates proper domain present
+   - Rejects file://, gopher://, etc.
+
+3. **Model IDs** (format validation)
+   ```python
+   from lib.validation import validate_model_id
+
+   # Prevents invalid API calls to Bedrock
+   validate_model_id(args.model)  # Format: region.provider.model
+   model = BedrockModel(model_id=args.model)
+   ```
+   - Validates format: `us.anthropic.claude-sonnet-4-6`
+   - Allows version suffixes: `:0`
+
+4. **Numeric inputs** (range validation)
+   ```python
+   from lib.validation import validate_temperature, validate_max_tokens
+
+   validate_temperature(args.temperature)  # Must be [0, 1]
+   validate_max_tokens(args.max_tokens)    # Must be positive integer
+   ```
+
+**Principles:**
+- Validate at system boundaries (user input, external URLs, file paths)
+- Don't validate internal data (functions passing validated data to each other)
+- Validate early, fail fast with clear error messages
+- Centralize validators (avoid duplication, DRY principle)
+- Test attack patterns (path traversal, scheme injection, format bypass)
+
+**See:** `lib/validation.py` (40 comprehensive tests in `lib/test_validation.py`)
+
 ### Error Handling
 - Log errors to **stderr**, not stdout (stdout is for data)
 - Exit code **0** on success, **non-zero** on failure
 - Error messages should answer: *What happened? Why? What should I do?*
 - Example: `Error: Could not fetch transcript for dQw4w9WgXcQ: Private video`
+- Validation errors: `Error: Invalid output path: path must be within .`
 
 ### Testing
 - **Integration tests**: Fetch a real public YouTube video, verify output format
