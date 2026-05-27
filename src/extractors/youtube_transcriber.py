@@ -26,10 +26,12 @@ Usage:
 import argparse
 import logging
 import os
+import re
 import sys
 from typing import Optional, List
 from urllib.parse import urlparse, parse_qs
 
+import httpx
 from youtube_transcript_api import YouTubeTranscriptApi
 
 # Add lib to path for validation utilities
@@ -75,6 +77,47 @@ def get_transcript(video_id: str, languages: Optional[List[str]] = None) -> Opti
         return None
 
 
+def get_title(video_id: str) -> Optional[str]:
+    """Fetch video title from YouTube."""
+    try:
+        resp = httpx.get(
+            f"https://www.youtube.com/watch?v={video_id}",
+            headers={"User-Agent": "Mozilla/5.0"},
+            follow_redirects=True, timeout=10
+        )
+        match = re.search(r"<title>(.+?)</title>", resp.text)
+        if match:
+            title = match.group(1).removesuffix(" - YouTube").strip()
+            return title
+    except Exception as e:
+        logger.warning(f"Could not fetch title for {video_id}: {e}")
+    return None
+
+
+def slugify(text: str, max_len: int = 60) -> str:
+    """Convert text to a filesystem-safe slug."""
+    text = text.lower()
+    text = re.sub(r'[^a-z0-9\s-]', '', text)
+    text = re.sub(r'[\s-]+', '-', text).strip('-')
+    return text[:max_len].rstrip('-')
+
+
+def get_author(video_id: str) -> Optional[str]:
+    """Fetch video author/channel name from YouTube."""
+    try:
+        resp = httpx.get(
+            f"https://www.youtube.com/watch?v={video_id}",
+            headers={"User-Agent": "Mozilla/5.0"},
+            follow_redirects=True, timeout=10
+        )
+        match = re.search(r'"author":"([^"]+)"', resp.text)
+        if match:
+            return match.group(1)
+    except Exception as e:
+        logger.warning(f"Could not fetch author for {video_id}: {e}")
+    return None
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description="Extract transcript from YouTube video"
@@ -87,6 +130,18 @@ if __name__ == '__main__':
     parser.add_argument(
         "-o", "--output",
         help="Write transcript to file (default: stdout)"
+    )
+    parser.add_argument(
+        "--title", action="store_true",
+        help="Print the video title and exit"
+    )
+    parser.add_argument(
+        "--slug", action="store_true",
+        help="Print suggested filename slug (slug-videoid) and exit"
+    )
+    parser.add_argument(
+        "--author", action="store_true",
+        help="Print the video author/channel name and exit"
     )
     args = parser.parse_args()
 
@@ -114,6 +169,25 @@ if __name__ == '__main__':
     if not vid:
         print(f"Error: Could not extract video ID from: {input_url}", file=sys.stderr)
         sys.exit(1)
+
+    # Handle --title, --slug, and --author flags
+    if args.title or args.slug or args.author:
+        if args.author:
+            author = get_author(vid)
+            if not author:
+                print(f"Error: Could not fetch author for {vid}", file=sys.stderr)
+                sys.exit(1)
+            print(author)
+        else:
+            title = get_title(vid)
+            if not title:
+                print(f"Error: Could not fetch title for {vid}", file=sys.stderr)
+                sys.exit(1)
+            if args.slug:
+                print(f"{slugify(title)}-{vid}")
+            else:
+                print(title)
+        sys.exit(0)
 
     # Fetch transcript
     transcript = get_transcript(vid)
