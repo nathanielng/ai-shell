@@ -22,7 +22,9 @@ Usage:
 import sys
 import argparse
 import os
+import re
 from urllib.parse import urlparse
+from typing import Optional
 
 import httpx
 from bs4 import BeautifulSoup
@@ -86,6 +88,73 @@ def fetch_and_convert(url: str) -> str:
     return markdown
 
 
+def get_page_title(html: str) -> Optional[str]:
+    """Extract page title from HTML."""
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Try og:title first (Open Graph)
+    og_title = soup.find("meta", property="og:title")
+    if og_title and og_title.get("content"):
+        return og_title.get("content")
+
+    # Fall back to <title> tag
+    if soup.title and soup.title.string:
+        return soup.title.string.strip()
+
+    return None
+
+
+def get_page_description(html: str) -> Optional[str]:
+    """Extract page description from meta tags."""
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Try og:description first
+    og_desc = soup.find("meta", property="og:description")
+    if og_desc and og_desc.get("content"):
+        return og_desc.get("content")
+
+    # Try meta description
+    meta_desc = soup.find("meta", attrs={"name": "description"})
+    if meta_desc and meta_desc.get("content"):
+        return meta_desc.get("content")
+
+    return None
+
+
+def get_page_author(html: str) -> Optional[str]:
+    """Extract page author from meta tags."""
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Try author meta tag
+    author = soup.find("meta", attrs={"name": "author"})
+    if author and author.get("content"):
+        return author.get("content")
+
+    # Try article:author
+    article_author = soup.find("meta", property="article:author")
+    if article_author and article_author.get("content"):
+        return article_author.get("content")
+
+    return None
+
+
+def get_publish_date(html: str) -> Optional[str]:
+    """Extract publish date from meta tags."""
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Try article:published_time
+    pub_time = soup.find("meta", property="article:published_time")
+    if pub_time and pub_time.get("content"):
+        return pub_time.get("content")
+
+    # Try datePublished
+    date_pub = soup.find("meta", attrs={"name": "datePublished"})
+    if date_pub and date_pub.get("content"):
+        return date_pub.get("content")
+
+    return None
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Convert web page to Markdown")
     parser.add_argument(
@@ -96,6 +165,22 @@ if __name__ == "__main__":
     parser.add_argument(
         "-o", "--output",
         help="Output file (default: stdout)"
+    )
+    parser.add_argument(
+        "--title", action="store_true",
+        help="Extract and print page title, exit"
+    )
+    parser.add_argument(
+        "--description", action="store_true",
+        help="Extract and print page description, exit"
+    )
+    parser.add_argument(
+        "--author", action="store_true",
+        help="Extract and print page author, exit"
+    )
+    parser.add_argument(
+        "--publish-date", action="store_true",
+        help="Extract and print publish date, exit"
     )
     args = parser.parse_args()
 
@@ -109,6 +194,49 @@ if __name__ == "__main__":
     if not input_url:
         parser.print_help(file=sys.stderr)
         sys.exit(1)
+
+    try:
+        validate_url(input_url)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Handle metadata extraction flags
+    if args.title or args.description or args.author or args.publish_date:
+        try:
+            resp = httpx.get(input_url, follow_redirects=True, timeout=30,
+                           headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"})
+            resp.raise_for_status()
+            html = resp.text
+        except Exception as e:
+            print(f"Error: Failed to fetch {input_url}: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        if args.title:
+            title = get_page_title(html)
+            if not title:
+                print(f"Error: Could not extract title from {input_url}", file=sys.stderr)
+                sys.exit(1)
+            print(title)
+        elif args.description:
+            desc = get_page_description(html)
+            if not desc:
+                print(f"Error: Could not extract description from {input_url}", file=sys.stderr)
+                sys.exit(1)
+            print(desc)
+        elif args.author:
+            author = get_page_author(html)
+            if not author:
+                print(f"Error: Could not extract author from {input_url}", file=sys.stderr)
+                sys.exit(1)
+            print(author)
+        elif args.publish_date:
+            pub_date = get_publish_date(html)
+            if not pub_date:
+                print(f"Error: Could not extract publish date from {input_url}", file=sys.stderr)
+                sys.exit(1)
+            print(pub_date)
+        sys.exit(0)
 
     try:
         result = fetch_and_convert(input_url)

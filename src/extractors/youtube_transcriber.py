@@ -118,6 +118,57 @@ def get_author(video_id: str) -> Optional[str]:
     return None
 
 
+def get_duration(video_id: str) -> Optional[str]:
+    """Fetch video duration in MM:SS format."""
+    try:
+        resp = httpx.get(
+            f"https://www.youtube.com/watch?v={video_id}",
+            headers={"User-Agent": "Mozilla/5.0"},
+            follow_redirects=True, timeout=10
+        )
+        match = re.search(r'"lengthSeconds":"(\d+)"', resp.text)
+        if match:
+            seconds = int(match.group(1))
+            mins = seconds // 60
+            secs = seconds % 60
+            return f"{mins}m {secs}s"
+    except Exception as e:
+        logger.warning(f"Could not fetch duration for {video_id}: {e}")
+    return None
+
+
+def get_upload_date(video_id: str) -> Optional[str]:
+    """Fetch video upload date."""
+    try:
+        resp = httpx.get(
+            f"https://www.youtube.com/watch?v={video_id}",
+            headers={"User-Agent": "Mozilla/5.0"},
+            follow_redirects=True, timeout=10
+        )
+        match = re.search(r'"dateText":{"simpleText":"([^"]+)"}', resp.text)
+        if match:
+            return match.group(1)
+    except Exception as e:
+        logger.warning(f"Could not fetch upload date for {video_id}: {e}")
+    return None
+
+
+def get_view_count(video_id: str) -> Optional[str]:
+    """Fetch video view count."""
+    try:
+        resp = httpx.get(
+            f"https://www.youtube.com/watch?v={video_id}",
+            headers={"User-Agent": "Mozilla/5.0"},
+            follow_redirects=True, timeout=10
+        )
+        match = re.search(r'"viewCount":{"videoViewCountRenderer":{"viewCount":{"simpleText":"([^"]+)"}', resp.text)
+        if match:
+            return match.group(1)
+    except Exception as e:
+        logger.warning(f"Could not fetch view count for {video_id}: {e}")
+    return None
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description="Extract transcript from YouTube video"
@@ -143,6 +194,18 @@ if __name__ == '__main__':
         "--author", action="store_true",
         help="Print the video author/channel name and exit"
     )
+    parser.add_argument(
+        "--duration", action="store_true",
+        help="Print the video duration (MM:SS) and exit"
+    )
+    parser.add_argument(
+        "--upload-date", action="store_true",
+        help="Print the video upload date and exit"
+    )
+    parser.add_argument(
+        "--views", action="store_true",
+        help="Print the video view count and exit"
+    )
     args = parser.parse_args()
 
     # Read stdin if piped, or use argument
@@ -156,23 +219,44 @@ if __name__ == '__main__':
         parser.print_help(file=sys.stderr)
         sys.exit(1)
 
-    # Validate URL format (only http/https allowed)
-    try:
-        validate_url(input_url)
-    except ValueError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
-
     # Extract video ID from URL or use as-is
-    vid = extract_video_id(input_url) if '/' in input_url else input_url
+    if '/' in input_url:
+        # Validate URL format (only http/https allowed)
+        try:
+            validate_url(input_url)
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+        vid = extract_video_id(input_url)
+    else:
+        # Bare video ID, no validation needed
+        vid = input_url
 
     if not vid:
         print(f"Error: Could not extract video ID from: {input_url}", file=sys.stderr)
         sys.exit(1)
 
-    # Handle --title, --slug, and --author flags
-    if args.title or args.slug or args.author:
-        if args.author:
+    # Handle metadata extraction flags
+    if args.title or args.slug or args.author or args.duration or args.upload_date or args.views:
+        if args.duration:
+            duration = get_duration(vid)
+            if not duration:
+                print(f"Error: Could not fetch duration for {vid}", file=sys.stderr)
+                sys.exit(1)
+            print(duration)
+        elif args.upload_date:
+            date = get_upload_date(vid)
+            if not date:
+                print(f"Error: Could not fetch upload date for {vid}", file=sys.stderr)
+                sys.exit(1)
+            print(date)
+        elif args.views:
+            views = get_view_count(vid)
+            if not views:
+                print(f"Error: Could not fetch view count for {vid}", file=sys.stderr)
+                sys.exit(1)
+            print(views)
+        elif args.author:
             author = get_author(vid)
             if not author:
                 print(f"Error: Could not fetch author for {vid}", file=sys.stderr)
