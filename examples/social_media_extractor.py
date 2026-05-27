@@ -2,83 +2,46 @@
 """
 Social Media Content Extractor
 
-A robust tool for extracting metadata and content from social media URLs across multiple platforms.
-
-Features:
-    - Multi-platform support: LinkedIn, X (Twitter), Instagram, YouTube
-    - CSV file processing: Read URLs from CSV, extract data, and update the file
-    - Smart filtering: Process only empty rows by default, or filter by specific platforms
-    - Flexible output: Extract titles, authors, content, and platform-specific metadata
-
-Supported Platforms:
-    - LinkedIn: Posts and articles (titles, authors, content from meta tags)
-    - X/Twitter: Tweets and posts (titles, authors, tweet content)
-    - Instagram: Posts and reels (captions, authors via meta tags)
-    - YouTube: Videos and community posts (titles, descriptions, channel names)
-    - AWS Blogs: AWS blog posts (titles, authors, content, publish dates, categories)
-    - GitHub: Repositories, issues, PRs, GitHub Pages (titles, descriptions, authors)
-
-CSV Processing:
-    The tool can read a CSV file containing URLs and automatically populate missing data
-    in the title, author, and content columns. By default, it only processes rows where
-    all three fields are empty, preventing overwriting of existing data.
-
-    After processing, completed rows are automatically moved to platform-specific CSV files:
-    - LinkedIn posts → linkedin.csv
-    - X/Twitter posts → x.csv
-    - Instagram posts → instagram.csv
-    - YouTube videos → youtube.csv
-
-    New rows are always added to the top of these files, keeping the most recent content first.
+Extracts metadata and content from URLs across multiple platforms.
+Supports single URL extraction or CSV batch processing.
 
 Usage:
-    # Process urls.csv (default - only empty rows, move to platform CSVs)
-    python social_media_extractor.py
-
-    # Process a single URL
+    # Single URL (outputs JSON)
     python social_media_extractor.py https://linkedin.com/posts/...
 
-    # Process a different CSV file
-    python social_media_extractor.py --csv my_urls.csv
+    # Piped URL
+    echo "https://linkedin.com/posts/..." | python social_media_extractor.py
 
-    # Process only LinkedIn URLs (moves to linkedin.csv)
-    python social_media_extractor.py --platform linkedin
+    # CSV input from stdin (outputs JSONL)
+    cat urls.csv | python social_media_extractor.py --csv
 
-    # Process only Instagram URLs (moves to instagram.csv)
-    python social_media_extractor.py --platform instagram
+    # CSV input from file (outputs JSONL)
+    python social_media_extractor.py --csv urls.csv
 
-    # Process all rows (including non-empty ones)
-    python social_media_extractor.py --force
+    # Output to file
+    python social_media_extractor.py --csv urls.csv -o results.jsonl
 
-    # Keep completed rows in urls.csv instead of moving them
-    python social_media_extractor.py --no-move
+Supported Platforms:
+    - LinkedIn: Posts and articles
+    - X/Twitter: Tweets and posts
+    - Instagram: Posts and reels
+    - YouTube: Videos and community posts
+    - AWS Blogs: Blog posts
+    - GitHub: Repositories, issues, PRs, GitHub Pages
 
 Environment Variables:
-    YOUTUBE_API_KEY: Optional YouTube Data API key for enhanced video metadata
-    TWITTER_BEARER_TOKEN: Optional X/Twitter API bearer token for full tweet access
-                          (Required for X content - scraping is blocked by login walls)
-    SAVE_RAW_HTML: Set to 'true' to include raw HTML in extraction results
-
-Important Notes:
-    - X/Twitter: Scraping is heavily restricted. For reliable extraction, set up
-      TWITTER_BEARER_TOKEN with your X API credentials. Without it, only basic
-      metadata (like author from URL) will be extracted.
-    - Instagram: Limited by login requirements, best-effort extraction
-    - YouTube: Works well without API key, but API provides richer metadata
-    - LinkedIn: Generally works well with scraping
-
-Requirements:
-    - requests: HTTP client for fetching URLs
-    - beautifulsoup4: HTML parsing
-    - python-dotenv: Environment variable management
-    - youtube-transcript-api: YouTube transcript/subtitle extraction
+    YOUTUBE_API_KEY: Optional YouTube Data API key for enhanced metadata
+    TWITTER_BEARER_TOKEN: Optional X/Twitter API bearer token
+    SAVE_RAW_HTML: Set to 'true' to include raw HTML in results
 """
 
 import argparse
 import asyncio
 import csv
+import json
 import logging
 import os
+import sys
 import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Dict, Any, List
@@ -88,16 +51,22 @@ import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
+import sys
+from pathlib import Path
+
+# Add src/extractors to path so we can import youtube_transcriber
+extractors_path = Path(__file__).parent.parent / 'src' / 'extractors'
+if str(extractors_path) not in sys.path:
+    sys.path.insert(0, str(extractors_path))
+
 from youtube_transcriber import get_transcript
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# Load environment variables
 load_dotenv()
 
 
@@ -105,7 +74,6 @@ class SocialMediaExtractor:
     """Extracts content from various social media platforms."""
 
     def __init__(self):
-        """Initialize the extractor with necessary headers and configuration."""
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -116,21 +84,11 @@ class SocialMediaExtractor:
             'Connection': 'keep-alive',
             'Upgrade-Insecure-Requests': '1'
         })
-
-        # API keys from environment (if available)
         self.youtube_api_key = os.getenv('YOUTUBE_API_KEY')
         self.twitter_bearer_token = os.getenv('TWITTER_BEARER_TOKEN')
 
     def get_platform(self, url: str) -> str:
-        """
-        Identify the platform from a URL.
-
-        Args:
-            url: The URL to check
-
-        Returns:
-            Platform name ('linkedin', 'x', 'instagram', 'youtube', 'aws', 'github', or 'unknown')
-        """
+        """Identify the platform from a URL."""
         parsed = urlparse(url)
         domain = parsed.netloc.lower().replace('www.', '')
 
@@ -150,15 +108,7 @@ class SocialMediaExtractor:
             return 'unknown'
 
     def extract(self, url: str) -> Dict[str, Any]:
-        """
-        Extract content from a social media URL.
-
-        Args:
-            url: The URL to extract content from
-
-        Returns:
-            Dictionary containing title, content, platform, and metadata
-        """
+        """Extract content from a social media URL."""
         logger.info(f"Processing URL: {url}")
 
         parsed = urlparse(url)
@@ -201,12 +151,10 @@ class SocialMediaExtractor:
 
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        # Try to extract from meta tags first (more reliable)
         title = None
         content = None
         author = None
 
-        # OpenGraph tags
         og_title = soup.find('meta', property='og:title')
         og_description = soup.find('meta', property='og:description')
 
@@ -216,14 +164,11 @@ class SocialMediaExtractor:
         if og_description:
             content = og_description.get('content', '').strip()
 
-        # Try to find author
         author_meta = soup.find('meta', attrs={'name': 'author'})
         if author_meta:
             author = author_meta.get('content', '').strip()
 
-        # Fallback: Try to extract from page structure
         if not content:
-            # LinkedIn often uses specific class names for post content
             post_content = soup.find('div', class_=re.compile(r'feed-shared-update-v2__description'))
             if post_content:
                 content = post_content.get_text(strip=True, separator='\n')
@@ -241,7 +186,6 @@ class SocialMediaExtractor:
         """Extract content from X (Twitter) post."""
         logger.info("Extracting X (Twitter) content")
 
-        # Try API first if bearer token is available
         if self.twitter_bearer_token:
             try:
                 return self._extract_x_api(url)
@@ -257,26 +201,20 @@ class SocialMediaExtractor:
         content = None
         author = None
 
-        # Try multiple meta tag strategies
-        # 1. Twitter Card tags (preferred)
         twitter_title = soup.find('meta', attrs={'name': 'twitter:title'})
         twitter_description = soup.find('meta', attrs={'name': 'twitter:description'})
         twitter_creator = soup.find('meta', attrs={'name': 'twitter:creator'})
 
-        # 2. OpenGraph tags (fallback)
         og_title = soup.find('meta', property='og:title')
         og_description = soup.find('meta', property='og:description')
 
-        # 3. Standard meta tags
         meta_description = soup.find('meta', attrs={'name': 'description'})
 
-        # Extract title
         if twitter_title:
             title = twitter_title.get('content', '').strip()
         elif og_title:
             title = og_title.get('content', '').strip()
 
-        # Extract content/description
         if twitter_description:
             content = twitter_description.get('content', '').strip()
         elif og_description:
@@ -284,24 +222,17 @@ class SocialMediaExtractor:
         elif meta_description:
             content = meta_description.get('content', '').strip()
 
-        # Extract author
         if twitter_creator:
             author = twitter_creator.get('content', '').strip().lstrip('@')
         elif title:
-            # Try to extract from title patterns
-            # Pattern 1: "Author on X: content"
             if ' on X:' in title:
                 author = title.split(' on X:')[0].strip()
-            # Pattern 2: "Author: content"
             elif ':' in title and len(title.split(':')[0]) < 50:
                 potential_author = title.split(':')[0].strip()
-                # Only use if it looks like a username (short, no special chars except _)
                 if len(potential_author) < 30 and not any(c in potential_author for c in ['(', ')', '[', ']']):
                     author = potential_author
 
-        # Try to extract from URL if we have a status URL
         if not author and '/status/' in url:
-            # URL pattern: https://x.com/username/status/123456
             parts = url.split('/')
             try:
                 username_idx = parts.index('x.com') + 1
@@ -310,13 +241,10 @@ class SocialMediaExtractor:
             except (ValueError, IndexError):
                 pass
 
-        # Use title as content if content is empty but title has substance
         if not content and title and len(title) > 30:
-            # If title looks like it contains the tweet content, use it
             if ' on X:' in title:
                 content = title.split(' on X:')[1].strip()
             elif author and title.startswith(author):
-                # Remove author name from beginning if present
                 content = title[len(author):].lstrip(':').strip()
 
         return {
@@ -332,7 +260,6 @@ class SocialMediaExtractor:
         """Extract content from X (Twitter) post using API."""
         logger.info("Using X API for tweet extraction")
 
-        # Extract tweet ID from URL
         tweet_id = None
         if '/status/' in url:
             parts = url.split('/status/')
@@ -342,7 +269,6 @@ class SocialMediaExtractor:
         if not tweet_id:
             raise ValueError("Could not extract tweet ID from URL")
 
-        # X API v2 endpoint
         api_url = f"https://api.twitter.com/2/tweets/{tweet_id}"
         params = {
             'tweet.fields': 'author_id,created_at,text,public_metrics',
@@ -391,7 +317,6 @@ class SocialMediaExtractor:
         content = None
         author = None
 
-        # OpenGraph tags
         og_title = soup.find('meta', property='og:title')
         og_description = soup.find('meta', property='og:description')
 
@@ -401,7 +326,6 @@ class SocialMediaExtractor:
         if og_description:
             content = og_description.get('content', '').strip()
 
-        # Extract author from title (usually "Author on Instagram: content")
         if title and ' on Instagram:' in title:
             author = title.split(' on Instagram:')[0].strip()
 
@@ -418,7 +342,6 @@ class SocialMediaExtractor:
         """Extract content from YouTube post or video."""
         logger.info("Extracting YouTube content")
 
-        # Determine if it's a community post or video
         is_community_post = '/post/' in url
 
         if is_community_post:
@@ -439,7 +362,6 @@ class SocialMediaExtractor:
         content = None
         author = None
 
-        # OpenGraph tags
         og_title = soup.find('meta', property='og:title')
         og_description = soup.find('meta', property='og:description')
 
@@ -449,7 +371,6 @@ class SocialMediaExtractor:
         if og_description:
             content = og_description.get('content', '').strip()
 
-        # Try to extract author from meta tags
         author_meta = soup.find('link', attrs={'itemprop': 'name'})
         if author_meta:
             author = author_meta.get('content', '').strip()
@@ -593,7 +514,6 @@ class SocialMediaExtractor:
         author = None
         published_date = None
 
-        # Try meta tags first
         og_title = soup.find('meta', property='og:title')
         og_description = soup.find('meta', property='og:description')
         meta_description = soup.find('meta', attrs={'name': 'description'})
@@ -606,39 +526,31 @@ class SocialMediaExtractor:
         elif meta_description:
             content = meta_description.get('content', '').strip()
 
-        # Try to extract from page structure
         if not title:
-            # AWS blogs typically use h1 for the title
             h1 = soup.find('h1')
             if h1:
                 title = h1.get_text(strip=True)
 
-        # Try to extract author from AWS blog structure
-        # AWS blogs often have author info in specific classes
         author_meta = soup.find('meta', attrs={'name': 'author'})
         if author_meta:
             author = author_meta.get('content', '').strip()
         else:
-            # Try to find author in common AWS blog patterns
             author_elem = soup.find('a', class_=re.compile(r'author'))
             if not author_elem:
                 author_elem = soup.find('span', class_=re.compile(r'author'))
             if author_elem:
                 author = author_elem.get_text(strip=True)
 
-        # Try to extract publish date
         date_meta = soup.find('meta', property='article:published_time')
         if not date_meta:
             date_meta = soup.find('meta', attrs={'name': 'publish-date'})
         if date_meta:
             published_date = date_meta.get('content', '').strip()
         else:
-            # Try to find date in page structure
             date_elem = soup.find('time')
             if date_elem:
                 published_date = date_elem.get('datetime', '') or date_elem.get_text(strip=True)
 
-        # Extract blog category from URL
         blog_category = None
         if '/blogs/' in url:
             parts = url.split('/blogs/')
@@ -664,7 +576,6 @@ class SocialMediaExtractor:
         parsed = urlparse(url)
         domain = parsed.netloc.lower()
 
-        # Determine type: GitHub Pages or github.com
         is_github_pages = 'github.io' in domain
         content_type = 'github_pages' if is_github_pages else 'github'
 
@@ -678,7 +589,6 @@ class SocialMediaExtractor:
         author = None
         repo_info = None
 
-        # Try meta tags first
         og_title = soup.find('meta', property='og:title')
         og_description = soup.find('meta', property='og:description')
         meta_description = soup.find('meta', attrs={'name': 'description'})
@@ -691,15 +601,12 @@ class SocialMediaExtractor:
         elif meta_description:
             content = meta_description.get('content', '').strip()
 
-        # Try to extract from page title if no meta tags
         if not title:
             title_tag = soup.find('title')
             if title_tag:
                 title = title_tag.get_text(strip=True)
 
-        # For github.com URLs, try to extract repository info
         if not is_github_pages and 'github.com' in domain:
-            # Extract repo owner and name from URL
             path_parts = parsed.path.strip('/').split('/')
             if len(path_parts) >= 2:
                 owner = path_parts[0]
@@ -707,7 +614,6 @@ class SocialMediaExtractor:
                 repo_info = f"{owner}/{repo_name}"
                 author = owner
 
-                # Determine content type from URL structure
                 if len(path_parts) > 2:
                     if path_parts[2] == 'issues':
                         content_type = 'github_issue'
@@ -718,19 +624,14 @@ class SocialMediaExtractor:
                 else:
                     content_type = 'github_repo'
 
-        # For GitHub Pages, try to extract author from domain
         if is_github_pages:
-            # Format: username.github.io
             subdomain = domain.split('.github.io')[0]
             if subdomain:
                 author = subdomain
 
-        # Try to find main content/description in page
         if not content:
-            # Try to find README or main content
             readme = soup.find('article', class_=re.compile(r'markdown'))
             if readme:
-                # Get first paragraph
                 first_p = readme.find('p')
                 if first_p:
                     content = first_p.get_text(strip=True)[:500]
@@ -747,306 +648,119 @@ class SocialMediaExtractor:
         }
 
 
-def append_to_platform_csv(platform: str, rows: List[Dict[str, Any]], fieldnames: List[str]) -> None:
-    """
-    Append rows to a platform-specific CSV file at the TOP of the file.
-
-    Args:
-        platform: Platform name (linkedin, x, instagram, youtube)
-        rows: List of rows to append
-        fieldnames: CSV field names
-    """
-    if not rows:
-        return
-
-    csv_filename = f"{platform}.csv"
-    existing_rows = []
-
-    # Read existing rows if file exists
-    if os.path.exists(csv_filename):
-        with open(csv_filename, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            existing_rows = list(reader)
-
-    # Write new rows at the top, then existing rows
-    with open(csv_filename, 'w', encoding='utf-8', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)  # New rows first
-        writer.writerows(existing_rows)  # Existing rows after
-
-    logger.info(f"✓ Moved {len(rows)} row(s) to {csv_filename}")
-
-
-def process_csv(
-    csv_path: str,
-    platform_filter: Optional[str] = None,
-    force_all: bool = False,
-    output_path: Optional[str] = None,
-    move_completed: bool = True
-) -> None:
-    """
-    Process URLs from a CSV file and update it with extracted data.
-
-    Args:
-        csv_path: Path to the CSV file containing URLs
-        platform_filter: Optional platform filter ('linkedin', 'x', 'instagram', 'youtube')
-        force_all: If True, process all rows. If False, only process rows where
-                   title, author, and content are all empty
-        output_path: Optional output path. If not provided, updates the input file
-        move_completed: If True, move completed rows to platform-specific CSV files
-    """
+def extract(url: str) -> Dict[str, Any]:
+    """Module-level API: extract metadata from a URL."""
     extractor = SocialMediaExtractor()
+    return extractor.extract(url)
 
-    # Read the CSV file
-    logger.info(f"Reading CSV file: {csv_path}")
-    rows = []
-    fieldnames = []
 
-    with open(csv_path, 'r', encoding='utf-8') as f:
-        reader = csv.DictReader(f)
-        fieldnames = reader.fieldnames or []
+def process_csv(csv_file) -> None:
+    """Read CSV from file or stdin, output JSONL to stdout."""
+    extractor = SocialMediaExtractor()
+    reader = csv.DictReader(csv_file)
 
-        # Ensure required columns exist
-        required_cols = ['url', 'title', 'author', 'content', 'platform']
-        for col in required_cols:
-            if col not in fieldnames:
-                fieldnames.append(col)
-
-        for row in reader:
-            # Ensure all required columns exist in the row dict
-            for col in required_cols:
-                if col not in row:
-                    row[col] = ''
-            rows.append(row)
-
-    logger.info(f"Loaded {len(rows)} rows from CSV")
-
-    # Process each row
-    processed_count = 0
-    skipped_count = 0
-    completed_rows = {
-        'linkedin': [],
-        'x': [],
-        'instagram': [],
-        'youtube': [],
-        'aws': [],
-        'github': []
-    }
-    remaining_rows = []
-
-    for idx, row in enumerate(rows):
+    for row in reader:
         url = row.get('url', '').strip()
-
         if not url:
-            logger.debug(f"Row {idx + 1}: Skipping empty URL")
-            skipped_count += 1
-            remaining_rows.append(row)
             continue
 
-        # Check platform filter
-        if platform_filter:
-            platform = extractor.get_platform(url)
-            if platform != platform_filter.lower():
-                logger.debug(f"Row {idx + 1}: Skipping {platform} URL (filter: {platform_filter})")
-                skipped_count += 1
-                remaining_rows.append(row)
-                continue
-
-        # Check if row should be processed (default: only if title, author, content are empty)
-        should_process = force_all or (
-            not (row.get('title') or '').strip() and
-            not (row.get('author') or '').strip() and
-            not (row.get('content') or '').strip()
-        )
-
-        if not should_process:
-            logger.debug(f"Row {idx + 1}: Skipping non-empty row (use --force to process)")
-            skipped_count += 1
-            remaining_rows.append(row)
-            continue
-
-        # Extract data
-        logger.info(f"Processing row {idx + 1}/{len(rows)}: {url}")
         try:
             result = extractor.extract(url)
-
-            # Update row with extracted data
-            row['platform'] = result.get('platform', '')
-            row['title'] = result.get('title', '')
-            row['author'] = result.get('author', '')
-            row['content'] = result.get('content', '')
-
-            processed_count += 1
-            logger.info(f"  ✓ Extracted: {result.get('title', 'N/A')[:50]}")
-
-            # Track completed rows by platform
-            row_platform = row['platform']
-            if move_completed and row_platform in completed_rows:
-                completed_rows[row_platform].append(row)
-            else:
-                remaining_rows.append(row)
-
+            print(json.dumps(result))
         except Exception as e:
-            logger.error(f"  ✗ Failed to process row {idx + 1}: {e}")
-            row['platform'] = 'error'
-            row['title'] = ''
-            row['author'] = ''
-            row['content'] = f"Error: {str(e)}"
-            remaining_rows.append(row)
-
-    # Move completed rows to platform-specific CSV files
-    if move_completed:
-        # Determine which platforms to move
-        platforms_to_move = []
-        if platform_filter:
-            platforms_to_move = [platform_filter]
-        else:
-            # Move all platforms that have completed rows
-            platforms_to_move = [p for p in completed_rows.keys() if completed_rows[p]]
-
-        for platform in platforms_to_move:
-            if completed_rows[platform]:
-                append_to_platform_csv(platform, completed_rows[platform], fieldnames)
-
-    # Write remaining rows back to urls.csv
-    output_file = output_path or csv_path
-    logger.info(f"Writing remaining {len(remaining_rows)} row(s) to: {output_file}")
-
-    with open(output_file, 'w', encoding='utf-8', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(remaining_rows)
-
-    logger.info(f"✓ Complete! Processed: {processed_count}, Skipped: {skipped_count}, Moved: {sum(len(rows) for rows in completed_rows.values())}")
+            logger.error(f"Error processing {url}: {e}", exc_info=True)
+            print(json.dumps({
+                'url': url,
+                'error': str(e)
+            }))
 
 
 def main():
-    """Main entry point with CLI argument parsing."""
     parser = argparse.ArgumentParser(
-        description='Extract metadata and content from social media URLs',
+        description='Extract metadata from social media URLs',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Process urls.csv (extracts data and moves to platform CSVs)
-  %(prog)s
+  # Single URL
+  python social_media_extractor.py https://linkedin.com/posts/...
 
-  # Process a single URL
-  %(prog)s https://linkedin.com/posts/...
+  # Piped URL
+  echo "https://linkedin.com/posts/..." | python social_media_extractor.py
 
-  # Process only Instagram URLs (moves to instagram.csv)
-  %(prog)s --platform instagram
+  # CSV from file
+  python social_media_extractor.py --csv urls.csv
 
-  # Process only LinkedIn URLs (moves to linkedin.csv)
-  %(prog)s --platform linkedin
+  # CSV from stdin
+  cat urls.csv | python social_media_extractor.py --csv
 
-  # Process all rows (including non-empty)
-  %(prog)s --force
-
-  # Keep completed rows in urls.csv (don't move)
-  %(prog)s --no-move
-
-Behavior:
-  - By default, completed rows are moved to platform-specific CSV files
-  - LinkedIn posts → linkedin.csv
-  - X/Twitter posts → x.csv
-  - Instagram posts → instagram.csv
-  - YouTube videos → youtube.csv
-  - AWS blogs → aws.csv
-  - GitHub content → github.csv
-  - New rows are added to the TOP of these files
-
-Platforms:
-  linkedin, x, instagram, youtube, aws, github
+  # Output to file
+  python social_media_extractor.py --csv urls.csv -o results.jsonl
         """
     )
 
-    parser.add_argument(
-        'url',
-        nargs='?',
-        help='Single URL to process (if not provided, processes urls.csv by default)'
-    )
-    parser.add_argument(
-        '--csv',
-        type=str,
-        default=None,
-        help='Path to CSV file containing URLs (default: urls.csv if no URL provided)'
-    )
-    parser.add_argument(
-        '--platform',
-        type=str,
-        choices=['linkedin', 'x', 'instagram', 'youtube', 'aws', 'github'],
-        help='Filter by platform (only process URLs from this platform)'
-    )
-    parser.add_argument(
-        '--force',
-        action='store_true',
-        help='Process all rows, even if title/author/content already exist'
-    )
-    parser.add_argument(
-        '--output',
-        type=str,
-        help='Output CSV path (default: overwrite input file)'
-    )
-    parser.add_argument(
-        '--no-move',
-        action='store_true',
-        help='Keep completed rows in urls.csv instead of moving to platform-specific files'
-    )
-
+    parser.add_argument('url', nargs='?', help='URL to extract (or read from stdin)')
+    parser.add_argument('--csv', action='store_true', help='Process CSV input (from stdin or file argument)')
+    parser.add_argument('-o', '--output', help='Write output to file (default: stdout)')
     args = parser.parse_args()
 
-    # Validate arguments and set defaults
-    if args.url and args.csv:
-        parser.error('Cannot process both a single URL and a CSV file simultaneously')
+    # Read stdin if piped
+    stdin_text = None
+    if not sys.stdin.isatty():
+        stdin_text = sys.stdin.read().strip()
 
-    # If no URL provided, default to processing urls.csv
-    if not args.url:
-        if args.csv is None:
-            args.csv = 'urls.csv'
-
-    # Process CSV file
+    # CSV mode
     if args.csv:
-        if not os.path.exists(args.csv):
-            logger.error(f"CSV file not found: {args.csv}")
-            return
-
-        process_csv(
-            csv_path=args.csv,
-            platform_filter=args.platform,
-            force_all=args.force,
-            output_path=args.output,
-            move_completed=not args.no_move
-        )
+        if args.url:
+            # CSV from file
+            try:
+                with open(args.url, 'r', encoding='utf-8') as f:
+                    csv_file = f
+                    if args.output:
+                        with open(args.output, 'w') as outf:
+                            old_stdout = sys.stdout
+                            sys.stdout = outf
+                            process_csv(csv_file)
+                            sys.stdout = old_stdout
+                    else:
+                        process_csv(csv_file)
+            except FileNotFoundError:
+                print(f"Error: CSV file not found: {args.url}", file=sys.stderr)
+                sys.exit(1)
+        elif stdin_text:
+            # CSV from stdin
+            from io import StringIO
+            csv_file = StringIO(stdin_text)
+            if args.output:
+                with open(args.output, 'w') as outf:
+                    old_stdout = sys.stdout
+                    sys.stdout = outf
+                    process_csv(csv_file)
+                    sys.stdout = old_stdout
+            else:
+                process_csv(csv_file)
+        else:
+            parser.error('CSV mode requires either a filename or piped input')
         return
 
-    # Process single URL
-    if args.url:
-        import json
+    # Single URL mode
+    url = args.url or stdin_text
+    if not url:
+        parser.print_help(file=sys.stderr)
+        sys.exit(1)
 
-        extractor = SocialMediaExtractor()
-        logger.info(f"Extracting content from: {args.url}")
+    try:
+        result = extract(url)
+        output = json.dumps(result, indent=2)
 
-        try:
-            result = extractor.extract(args.url)
-
-            print(f"\n{'='*80}")
-            print(f"Platform: {result.get('platform')}")
-            print(f"URL: {result.get('url')}")
-            print(f"Title: {result.get('title')}")
-            print(f"Author: {result.get('author')}")
-            print(f"Content Preview: {result.get('content', '')[:200]}...")
-            print(f"{'='*80}\n")
-
-            # Save to JSON
-            output_file = 'extracted_content.json'
-            with open(output_file, 'w', encoding='utf-8') as f:
-                json.dump(result, f, indent=2, ensure_ascii=False)
-
-            logger.info(f"Full result saved to {output_file}")
-
-        except Exception as e:
-            logger.error(f"Failed to process URL: {e}", exc_info=True)
+        if args.output:
+            with open(args.output, 'w') as f:
+                f.write(output)
+            print(f"Written to {args.output}", file=sys.stderr)
+        else:
+            print(output)
+    except Exception as e:
+        logger.error(f"Failed to extract from {url}: {e}", exc_info=True)
+        sys.exit(1)
 
 
 if __name__ == '__main__':
