@@ -69,6 +69,7 @@ Format as a professional meeting summary document.
 import argparse
 import logging
 import os
+import re
 import sys
 
 from botocore.config import Config
@@ -156,6 +157,34 @@ def get_tool(tool: str) -> Any:
     return tools[tool]
 
 
+def _substitute_env_vars(value: str) -> str:
+    """
+    Substitute environment variables in directive values.
+
+    Syntax: {VAR_NAME} expands to os.environ['VAR_NAME'].
+    Only uppercase identifiers with letters/numbers/underscores are expanded.
+
+    Args:
+        value: String potentially containing {VAR_NAME} placeholders
+
+    Returns:
+        String with environment variables substituted
+
+    Raises:
+        ValueError: If referenced variable doesn't exist
+    """
+    def replace_var(match):
+        var_name = match.group(1)
+        if var_name not in os.environ:
+            raise ValueError(f"Environment variable not found: {var_name}")
+        return os.environ[var_name]
+
+    try:
+        return re.sub(r'\{([A-Z_][A-Z0-9_]*)\}', replace_var, value)
+    except ValueError:
+        raise
+
+
 def parse_agent_script(script_path: str) -> Dict[str, Any]:
     """
     Parse agent script to extract configuration and system prompt.
@@ -163,6 +192,7 @@ def parse_agent_script(script_path: str) -> Dict[str, Any]:
     The script format supports:
     - Shebang line (ignored if present)
     - #@ directives for configuration (e.g., #@ model: model-id)
+    - Environment variable substitution in directives: {VAR_NAME}
     - System prompt as non-comment lines
 
     Args:
@@ -174,6 +204,7 @@ def parse_agent_script(script_path: str) -> Dict[str, Any]:
             - temperature (float): Sampling temperature
             - max_tokens (int): Maximum tokens to generate
             - tools (list): List of tool names to enable
+            - skills (list): List of skills to load (optional)
             - system_prompt (str): The system prompt for the agent
 
     Raises:
@@ -183,12 +214,16 @@ def parse_agent_script(script_path: str) -> Dict[str, Any]:
 
     Example:
         Script file content:
-            #!/usr/bin/env python3
-            #@ model: us.amazon.nova-lite-v1:0
+            #!/usr/bin/env aish.py
+            #@ model: {BEDROCK_MODEL}
             #@ temperature: 0.7
             #@ tools: file_read, file_write
+            #@ skills: summarize, format
 
             You are a helpful assistant that processes text files.
+
+        With .env:
+            BEDROCK_MODEL=us.amazon.nova-lite-v1:0
     """
     script_file = Path(script_path)
 
@@ -213,7 +248,8 @@ def parse_agent_script(script_path: str) -> Dict[str, Any]:
         'model': DEFAULT_MODEL_ID,
         'temperature': DEFAULT_TEMPERATURE,
         'max_tokens': DEFAULT_MAX_TOKENS,
-        'tools': []
+        'tools': [],
+        'skills': []
     }
 
     system_prompt_lines = []
@@ -227,10 +263,18 @@ def parse_agent_script(script_path: str) -> Dict[str, Any]:
                 key = key.strip()
                 value = value.strip()
 
+                # Substitute environment variables in directive values
+                try:
+                    value = _substitute_env_vars(value)
+                except ValueError as e:
+                    raise ValueError(f"Variable substitution error at line {line_num}: {e}") from e
+
                 if key == 'model':
                     config['model'] = value
                 elif key == 'tools':
                     config['tools'] = [t.strip() for t in value.split(',')]
+                elif key == 'skills':
+                    config['skills'] = [s.strip() for s in value.split(',')]
                 elif key == 'temperature':
                     try:
                         config[key] = float(value)

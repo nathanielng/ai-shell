@@ -244,6 +244,87 @@ text = get_transcript("VIDEO_ID")
 
 This allows embedding in larger workflows without subprocess overhead.
 
+### Pattern: Strands Agent Scripts (.ai Format)
+
+Agent scripts define AI agent instances in a declarative, Unix-friendly format. Each `.ai` file specifies model, parameters, tools, and system prompt.
+
+**Format:**
+```
+#!/usr/bin/env aish.py
+#@ model: {BEDROCK_MODEL}
+#@ temperature: 0.3
+#@ max_tokens: 2048
+#@ tools: file_read, file_write
+#@ skills: summarize, format
+
+You are an executive assistant that processes meeting notes...
+```
+
+**Components:**
+- **Shebang**: `#!/usr/bin/env aish.py` makes the script executable
+- **Directives** (`#@`): Configuration with environment variable substitution
+- **System prompt**: Everything below directives is the agent's instructions
+
+**Environment Variable Substitution (Zone 1: Directives Only)**
+
+Directives support `{VAR_NAME}` syntax to substitute environment variables from `.env`:
+
+```
+#@ model: {BEDROCK_MODEL}        # Expands to value of $BEDROCK_MODEL
+#@ temperature: {AISH_TEMP}      # Expands to value of $AISH_TEMP
+```
+
+**Security Design:**
+
+Variable substitution is restricted to directives (not system prompts) for safety:
+
+1. **Trusted zone (directives):** `{VAR_NAME}` substitution allowed
+   - Reason: Directives are configuration (metadata), not language
+   - Examples: model ID, temperature, tool names, skills
+   - Safe: System can't be reinterpreted by variable values
+
+2. **Untrusted zone (system prompt):** No substitution
+   - Reason: Prevents prompt injection attacks
+   - Risk: `You are {ROLE}` with untrusted `ROLE` could inject instructions
+   - Defense: System prompt is fixed; environment only affects configuration
+
+3. **Variable source:** `.env` only (not stdin/args)
+   - Reason: `.env` is filesystem-protected; user input is untrusted
+   - Pattern: `load_dotenv()` reads from project `.env` before parsing
+
+**Example with .env:**
+
+`.env`:
+```
+BEDROCK_MODEL=us.amazon.nova-lite-v1:0
+AISH_TEMPERATURE=0.3
+AISH_MAX_TOKENS=2048
+```
+
+`summarize.ai`:
+```
+#!/usr/bin/env aish.py
+#@ model: {BEDROCK_MODEL}
+#@ temperature: {AISH_TEMPERATURE}
+#@ max_tokens: {AISH_MAX_TOKENS}
+
+You are a summarization expert. Analyze the input and produce a concise summary...
+```
+
+**Why This Design:**
+
+- **Composability:** Scripts are text files, can be versioned, templated, shared
+- **Unix alignment:** Shebang makes them executable; `.env` follows 12-factor app conventions
+- **Security:** Clear separation between configuration (variable) and instructions (fixed)
+- **Simplicity:** Minimal parsing; directives are key-value pairs
+
+**Supported Directives:**
+- `model`: Bedrock model ID (supports variable substitution)
+- `temperature`: Sampling temperature 0-1 (supports variable substitution)
+- `max_tokens`: Max output tokens (supports variable substitution)
+- `tools`: Comma-separated tool names (supports variable substitution)
+- `skills`: Comma-separated skill names (supports variable substitution, for Agent Skills standard)
+
 ### Pattern: Optional JSON Output (Not Default)
 
 **When JSON makes sense:**

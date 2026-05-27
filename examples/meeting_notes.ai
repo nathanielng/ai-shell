@@ -2,10 +2,15 @@
 # meeting_notes.ai - Meeting notes formatter and summarizer
 # Usage: cat raw_notes.txt | ./meeting_notes.ai
 #        cat meeting_transcript.txt | ./meeting_notes.ai
+#
+# Environment variables (from .env):
+#   BEDROCK_MODEL - Bedrock model ID (default: us.amazon.nova-lite-v1:0)
+#   AISH_TEMPERATURE - Model temperature (default: 0.3)
+#   AISH_MAX_TOKENS - Max output tokens (default: 2048)
 
-#@ model: us.amazon.nova-lite-v1:0
-#@ temperature: 0.3
-#@ max_tokens: 2048
+#@ model: {BEDROCK_MODEL}
+#@ temperature: {AISH_TEMPERATURE}
+#@ max_tokens: {AISH_MAX_TOKENS}
 
 You are an executive assistant. Transform rough meeting notes or transcripts into a professional, structured format.
 
