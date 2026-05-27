@@ -30,10 +30,27 @@ cat urls.csv | python src/extractors/social_media_extractor.py
 python src/extractors/web_to_markdown.py https://example.com/article
 ```
 
+### Transcribe Audio
+
+```bash
+# Default (mlx-whisper)
+python src/extractors/audio_transcriber.py recording.mp3
+
+# Qwen3-ASR for CJK languages
+python src/extractors/audio_transcriber.py recording.mp3 --backend qwen3
+
+# Transcribe and summarize
+python src/extractors/audio_transcriber.py recording.mp3 \
+  | python src/agents/strands_cli.py "Summarize the key points"
+```
+
+See `~/code/ai-skills/audio-transcribe/SKILL.md` for full documentation and backend comparison.
+
 ## Tools
 
 ### Extractors (`src/extractors/`)
 
+- **`audio_transcriber.py`** — Transcribe audio to text on-device using Apple Silicon GPU (mlx-whisper or Qwen3-ASR)
 - **`youtube_transcriber.py`** — Fetch YouTube transcripts/subtitles (no API key required)
 - **`social_media_extractor.py`** — Extract metadata from LinkedIn, X, Instagram, YouTube, AWS blogs, GitHub
 - **`web_to_markdown.py`** — Convert web pages to clean Markdown
@@ -134,6 +151,7 @@ ai-shell/
 ├── .env                         # Credentials (gitignored)
 ├── src/
 │   ├── extractors/              # Data extraction tools
+│   │   ├── audio_transcriber.py
 │   │   ├── youtube_transcriber.py
 │   │   ├── social_media_extractor.py
 │   │   └── web_to_markdown.py
