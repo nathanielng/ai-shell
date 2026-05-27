@@ -21,11 +21,16 @@ Usage:
 
 import sys
 import argparse
+import os
 from urllib.parse import urlparse
 
 import httpx
 from bs4 import BeautifulSoup
 from markdownify import markdownify as md
+
+# Add lib to path for validation utilities
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'lib'))
+from validation import validate_url, validate_output_path
 
 
 def fetch_and_convert(url: str) -> str:
@@ -55,6 +60,8 @@ def fetch_and_convert(url: str) -> str:
         else:
             html = raw.decode("utf-8")
     else:
+        # Validate URL before fetching
+        validate_url(url)
         resp = httpx.get(url, follow_redirects=True, timeout=30,
                          headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"})
         resp.raise_for_status()
@@ -110,7 +117,14 @@ if __name__ == "__main__":
         sys.exit(1)
 
     if args.output:
-        with open(args.output, "w") as f:
+        # Validate output path to prevent traversal attacks
+        try:
+            output_path = validate_output_path(args.output)
+        except (ValueError, RuntimeError) as e:
+            print(f"Error: Invalid output path: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        with open(output_path, "w") as f:
             f.write(result)
         print(f"Wrote markdown to {args.output}", file=sys.stderr)
     else:

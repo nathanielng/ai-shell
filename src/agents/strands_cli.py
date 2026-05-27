@@ -41,6 +41,10 @@ from dotenv import load_dotenv
 from strands import Agent
 from strands.models import BedrockModel
 
+# Add lib to path for validation utilities
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'lib'))
+from validation import validate_output_path, validate_model_id
+
 load_dotenv()
 
 
@@ -84,6 +88,13 @@ def main():
         print("No input provided.", file=sys.stderr)
         sys.exit(1)
 
+    # Validate model ID format before passing to Bedrock
+    try:
+        validate_model_id(args.model)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
     agent = build_agent(args.system, args.model, args.region)
     result = agent(message)
     response_text = "".join(
@@ -103,7 +114,14 @@ def main():
         output = response_text
 
     if args.output:
-        with open(args.output, "w") as f:
+        # Validate output path to prevent traversal attacks
+        try:
+            output_path = validate_output_path(args.output)
+        except (ValueError, RuntimeError) as e:
+            print(f"Error: Invalid output path: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        with open(output_path, "w") as f:
             f.write(output + "\n")
         print(f"Written to {args.output}", file=sys.stderr)
     else:

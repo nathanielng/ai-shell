@@ -25,11 +25,16 @@ Usage:
 
 import argparse
 import logging
+import os
 import sys
 from typing import Optional, List
 from urllib.parse import urlparse, parse_qs
 
 from youtube_transcript_api import YouTubeTranscriptApi
+
+# Add lib to path for validation utilities
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'lib'))
+from validation import validate_url, validate_output_path
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +101,13 @@ if __name__ == '__main__':
         parser.print_help(file=sys.stderr)
         sys.exit(1)
 
+    # Validate URL format (only http/https allowed)
+    try:
+        validate_url(input_url)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
     # Extract video ID from URL or use as-is
     vid = extract_video_id(input_url) if '/' in input_url else input_url
 
@@ -111,7 +123,14 @@ if __name__ == '__main__':
 
     # Output
     if args.output:
-        with open(args.output, "w") as f:
+        # Validate output path to prevent traversal attacks
+        try:
+            output_path = validate_output_path(args.output)
+        except (ValueError, RuntimeError) as e:
+            print(f"Error: Invalid output path: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        with open(output_path, "w") as f:
             f.write(transcript)
         print(f"Wrote transcript to {args.output}", file=sys.stderr)
     else:
