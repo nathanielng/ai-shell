@@ -532,10 +532,46 @@ ai-shell/
 - Avoid abbreviations unless universally known (e.g., `csv` ok, `xtr` bad)
 
 ### Configuration
-- **Environment variables** for defaults that rarely change: `AWS_BEDROCK_REGION`, `YOUTUBE_API_KEY`
-- **CLI args** for per-invocation overrides: `-o`, `-s`, `-m`
-- **.env files** for local secrets (gitignored)
-- **No hardcoded paths** or credentials — always externalize
+
+**Three-tier approach (12-factor app pattern):**
+
+1. **`.env.example`** (committed to git)
+   - Documents all available variables
+   - Shows defaults
+   - Users copy it: `cp .env.example .env`
+   - Purpose: Discoverability without reading code
+
+2. **`.env`** (gitignored, never committed)
+   - User's actual configuration
+   - API keys, credentials, overrides
+   - Loaded by `load_dotenv()` at startup
+
+3. **Code defaults** (fallback in source)
+   - If environment variable not found, use hardcoded default
+   - Example: `os.getenv('AISH_MODEL_ID', 'us.amazon.nova-lite-v1:0')`
+   - Ensures tool works without manual setup
+
+**Guidelines:**
+- Environment variables for defaults that rarely change: `AWS_BEDROCK_REGION`, `AISH_TEMPERATURE`
+- CLI args for per-invocation overrides: `-o`, `-s`, `-m`
+- Use `.env` for secrets, API keys, and local overrides
+- No hardcoded paths or credentials — always externalize
+- Uppercase variable names (e.g., `AISH_TEMPERATURE`, not `aish_temperature`)
+
+**Example (.env.example):**
+```
+BEDROCK_REGION=us-west-2
+AISH_MODEL_ID=us.amazon.nova-lite-v1:0
+AISH_TEMPERATURE=0.1
+AISH_MAX_TOKENS=2048
+AWS_BEARER_TOKEN_BEDROCK=your_key_here
+```
+
+**Why this matters:**
+- **Discoverability:** `cp .env.example .env` shows all options
+- **Security:** Secrets never committed; code has safe defaults
+- **Maintainability:** Single source of truth for configuration
+- **Onboarding:** New developers see what variables exist
 
 ### Error Handling
 - Log errors to **stderr**, not stdout (stdout is for data)
